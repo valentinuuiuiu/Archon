@@ -795,7 +795,7 @@ class DocumentAgent(BaseAgent[DocumentDependencies, DocumentOperation]):
     def get_system_prompt(self) -> str:
         """Get the base system prompt for this agent."""
         try:
-            from ..services.prompt_service import prompt_service
+            from ..server.services.prompt_service import prompt_service
 
             # For now, use document_builder as default
             # In future, could make this configurable based on operation type

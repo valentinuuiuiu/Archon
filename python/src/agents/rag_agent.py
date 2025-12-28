@@ -316,7 +316,7 @@ class RagAgent(BaseAgent[RagDependencies, str]):
     def get_system_prompt(self) -> str:
         """Get the base system prompt for this agent."""
         try:
-            from ..services.prompt_service import prompt_service
+            from ..server.services.prompt_service import prompt_service
 
             return prompt_service.get_prompt(
                 "rag_assistant",
