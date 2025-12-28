@@ -28,6 +28,7 @@ from .document_agent import DocumentAgent
 from .rag_agent import RagAgent
 from .factory_agent import FactoryAgent
 from .dynamic_agent import DynamicAgent
+from .beam_agent import BeamAgent, BeamDependencies
 from ..server.services.client_manager import get_supabase_client
 
 # Configure logging
@@ -59,6 +60,7 @@ AVAILABLE_AGENTS = {
     "document": DocumentAgent,
     "rag": RagAgent,
     "factory": FactoryAgent,
+    "beam": BeamAgent,
 }
 
 # Global credentials storage
@@ -294,7 +296,13 @@ async def stream_agent(agent_type: str, request: AgentRequest):
                 )
             elif agent_type == "factory":
                 from .factory_agent import FactoryDependencies
-                deps = FactoryDependencies()
+                deps = FactoryDependencies(
+                    user_id=request.context.get("user_id") if request.context else None
+                )
+            elif agent_type == "beam":
+                deps = BeamDependencies(
+                    beam_width=request.options.get("beam_width", 3) if request.options else 3
+                )
             else:
                 # Check if it is a dynamic agent
                 if isinstance(agent, DynamicAgent):
