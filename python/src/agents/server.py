@@ -26,6 +26,9 @@ from pydantic import BaseModel
 # Import our PydanticAI agents
 from .document_agent import DocumentAgent
 from .rag_agent import RagAgent
+from .factory_agent import FactoryAgent
+from .dynamic_agent import DynamicAgent
+from ..server.services.client_manager import get_supabase_client
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -55,6 +58,7 @@ class AgentResponse(BaseModel):
 AVAILABLE_AGENTS = {
     "document": DocumentAgent,
     "rag": RagAgent,
+    "factory": FactoryAgent,
 }
 
 # Global credentials storage
@@ -63,6 +67,10 @@ AGENT_CREDENTIALS = {}
 
 async def fetch_credentials_from_server():
     """Fetch credentials from the server's internal API."""
+    if os.getenv("SKIP_CREDENTIALS_FETCH", "false").lower() == "true":
+        logger.info("Skipping credentials fetch (SKIP_CREDENTIALS_FETCH=true)")
+        return {}
+
     max_retries = 30  # Try for up to 5 minutes (30 * 10 seconds)
     retry_delay = 10  # seconds
 
@@ -133,6 +141,9 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error(f"Failed to initialize {name} agent: {e}")
 
+    # Load dynamic agents from DB
+    await load_dynamic_agents(app)
+
     yield
 
     # Cleanup
@@ -194,6 +205,44 @@ async def run_agent(request: AgentRequest):
         return AgentResponse(success=False, error=str(e))
 
 
+async def load_dynamic_agents(app: FastAPI):
+    """Load dynamic agents from the database."""
+    try:
+        supabase = get_supabase_client()
+        response = supabase.table("archon_agents").select("*").execute()
+
+        for agent_data in response.data:
+            name = agent_data["name"]
+            # Skip if overwriting built-in agents, or handle it?
+            # For now, let's prefix dynamic agents or just allow overwrite if careful.
+            # But let's avoid overwriting built-ins for safety.
+            if name in AVAILABLE_AGENTS:
+                logger.warning(f"Skipping dynamic agent '{name}' as it conflicts with built-in agent.")
+                continue
+
+            try:
+                dynamic_agent = DynamicAgent(
+                    name=name,
+                    system_prompt=agent_data["system_prompt"],
+                    model=agent_data.get("model", "openai:gpt-4o"),
+                    tools=agent_data.get("tools", [])
+                )
+                app.state.agents[name] = dynamic_agent
+                logger.info(f"Loaded dynamic agent: {name}")
+            except Exception as e:
+                logger.error(f"Failed to load dynamic agent '{name}': {e}")
+
+    except Exception as e:
+        logger.error(f"Error loading dynamic agents: {e}")
+
+
+@app.post("/agents/refresh")
+async def refresh_agents():
+    """Reload agents from the database."""
+    await load_dynamic_agents(app)
+    return {"status": "refreshed", "agents": list(app.state.agents.keys())}
+
+
 @app.get("/agents/list")
 async def list_agents():
     """List all available agents and their capabilities"""
@@ -243,11 +292,18 @@ async def stream_agent(agent_type: str, request: AgentRequest):
                     project_id=request.context.get("project_id") if request.context else None,
                     user_id=request.context.get("user_id") if request.context else None,
                 )
+            elif agent_type == "factory":
+                from .factory_agent import FactoryDependencies
+                deps = FactoryDependencies()
             else:
-                # Default dependencies
-                from .base_agent import ArchonDependencies
-
-                deps = ArchonDependencies()
+                # Check if it is a dynamic agent
+                if isinstance(agent, DynamicAgent):
+                     from .dynamic_agent import DynamicDependencies
+                     deps = DynamicDependencies(context=request.context)
+                else:
+                    # Default dependencies
+                    from .base_agent import ArchonDependencies
+                    deps = ArchonDependencies()
 
             # Use PydanticAI's run_stream method
             # run_stream returns an async context manager directly
